@@ -9,11 +9,7 @@ from features.dynamics_features import extract_dynamics
 from features.stereo_features import extract_stereo_features
 
 from ml.embedding_extractor import EmbeddingExtractor
-from ml.section_embedding import extract_section_embeddings
-
 from features.structure.section_detection import detect_sections
-from features.harmony.chord_detection import detect_chords
-from features.rhythm.beat_tracking import extract_beat_grid
 
 
 SUPPORTED_FORMATS = (".wav", ".mp3", ".flac")
@@ -22,6 +18,46 @@ SUPPORTED_FORMATS = (".wav", ".mp3", ".flac")
 extractor = EmbeddingExtractor()
 
 
+# -------------------------
+# 🎯 SECTION EMBEDDING HELPER
+# -------------------------
+def extract_section_embeddings(y, sr, sections, extractor):
+    section_data = []
+
+    for sec in sections:
+        try:
+            start = int(sec["start"] * sr)
+            end = int(sec["end"] * sr)
+
+            y_sec = y[:, start:end] if y.ndim > 1 else y[start:end]
+
+            # convert to mono
+            if y_sec.ndim > 1:
+                import librosa
+                y_sec = librosa.to_mono(y_sec)
+
+            emb = extractor.extract_embedding(y_sec, sr)
+
+            if emb is None or np.isnan(emb).any():
+                continue
+
+            section_data.append({
+                "type": sec.get("type"),
+                "start": sec.get("start"),
+                "end": sec.get("end"),
+                "embedding": emb.tolist()
+            })
+
+        except Exception as e:
+            print(f"⚠️ Section embedding failed: {e}")
+            continue
+
+    return section_data
+
+
+# -------------------------
+# 🎧 PROCESS SINGLE FILE
+# -------------------------
 def process_file(file_path, genre):
     try:
         print(f"\n🎧 Processing: {file_path}")
@@ -29,7 +65,7 @@ def process_file(file_path, genre):
         y, sr = load_audio(file_path)
 
         # -------------------------
-        # BASE FEATURES
+        # 🎧 BASIC FEATURES (LIGHT)
         # -------------------------
         base = extract_base(y, sr)
         spectral = extract_spectral(y, sr)
@@ -37,63 +73,96 @@ def process_file(file_path, genre):
         stereo = extract_stereo_features(y, sr)
 
         features = {
-            **base,
-            **spectral,
-            **dynamics,
-            **stereo
+            "tempo": base.get("tempo_bpm"),
+            "key": base.get("key_signature"),
+            "energy": dynamics.get("dynamic_range"),
+            "spectral_centroid": spectral.get("spectral_centroid"),
+            "stereo_width": stereo.get("stereo_width"),
         }
 
         # -------------------------
-        # 🎼 MUSICAL FEATURES
+        # 🎼 STRUCTURE
         # -------------------------
-        chords = detect_chords(y, sr)
-        beat_grid = extract_beat_grid(y, sr)
-        sections = detect_sections(y, sr, genre)
+        sections_raw = detect_sections(y, sr, genre)
+
+        sections_clean = [
+            {
+                "type": s.get("type"),
+                "start": s.get("start"),
+                "end": s.get("end")
+            }
+            for s in sections_raw
+        ]
 
         # -------------------------
-        # 🤖 EMBEDDINGS
+        # 🤖 TRACK EMBEDDING
         # -------------------------
         embedding = extractor.extract_embedding(y, sr)
 
-        # 🚨 SAFETY CHECK
-        if np.linalg.norm(embedding) == 0:
-            print("⚠️ Skipping invalid embedding")
+        if embedding is None:
+            print("⚠️ Skipping (invalid embedding)")
             return
 
-        section_embeddings = extract_section_embeddings(y, sr, sections, extractor)
+        if np.isnan(embedding).any():
+            print("⚠️ Skipping (NaN embedding)")
+            return
 
         # -------------------------
-        # 📦 FORMAT FOR JSON
+        # 🧠 SECTION EMBEDDINGS (🔥 NEW)
         # -------------------------
-        features["embedding"] = embedding.tolist()
+        section_embeddings = extract_section_embeddings(
+            y, sr, sections_clean, extractor
+        )
 
-        # Convert section embeddings to list
-        features["section_embeddings"] = [
-            {
-                "section": sec["type"],
-                "embedding": sec["embedding"] if isinstance(sec["embedding"], list) else sec["embedding"].tolist()
-            }
-            for sec in section_embeddings
-        ]
+        embedding = extractor.extract_embedding(y, sr)
 
-        # Store musical structure
-        features["sections"] = sections
-        features["chords"] = chords
-        features["beat_grid"] = beat_grid
+        # 🚨 SAFETY CHECKS (ADD HERE)
+        if embedding is None:
+            print("⚠️ Skipping (embedding failed)")
+            return
+
+        print("Embedding length:", len(embedding))  # Debug check
+
+        if np.linalg.norm(embedding) == 0:
+           print("⚠️ Skipping (zero embedding)")
+           return
+
+        if np.isnan(embedding).any():
+           print("⚠️ Skipping (NaN embedding)")
+           return
 
         # -------------------------
-        # SAVE
+        # 📦 FINAL STRUCTURE
         # -------------------------
         track_name = os.path.splitext(os.path.basename(file_path))[0]
 
+        reference_data = {
+            "track": track_name,
+            "artist": "Unknown",
+            "genre": genre,
+
+            # 🔥 CORE VECTOR
+            "embedding": embedding.tolist(),
+
+            # lightweight features
+            "features": features,
+
+            # 🔥 STRUCTURE WITH EMBEDDINGS
+            "sections": section_embeddings
+        }
+
+        # -------------------------
+        # 💾 SAVE
+        # -------------------------
         save_reference(
             track_name=track_name,
             artist="Unknown",
             genre=genre,
-            features=features
+            features=reference_data
         )
 
         print(f"✅ Done: {track_name}")
+        print(f"   Sections saved: {len(section_embeddings)}")
 
     except Exception as e:
         print(f"❌ Failed: {file_path}")
@@ -101,6 +170,9 @@ def process_file(file_path, genre):
         traceback.print_exc()
 
 
+# -------------------------
+# 🔁 PROCESS ALL GENRES
+# -------------------------
 def process_all_genres(base_folder):
 
     genres = os.listdir(base_folder)
@@ -126,10 +198,12 @@ def process_all_genres(base_folder):
 
 
 # ------------------------------
-# ENTRY
+# 🚀 ENTRY
 # ------------------------------
 if __name__ == "__main__":
 
-    DATASET_ROOT = "datasets"
+    DATASET_ROOT = "datasets"  # ⚠️ ensure correct folder name
 
     process_all_genres(DATASET_ROOT)
+
+    print("\n🚀 ALL TRACKS PROCESSED")

@@ -80,10 +80,24 @@ def analyze_melody_mix(melody):
 
     return []
 
-
-def mix_advisor(features, stereo, melody):
-
+def mix_advisor(
+    base,
+    spectral,
+    dynamics,
+    stereo,
+    masking=None,
+    drums=None,
+    melody=None
+):
     advice = []
+
+    # Merge everything into one feature dict (for legacy functions)
+    features = {
+        **base,
+        **spectral,
+        **dynamics,
+        **stereo
+    }
 
     # -------------------------
     # LOUDNESS
@@ -108,7 +122,27 @@ def mix_advisor(features, stereo, melody):
     # -------------------------
     # MELODY IN MIX
     # -------------------------
-    advice.extend(analyze_melody_mix(melody))
+    if melody is not None:
+        advice.extend(analyze_melody_mix(melody))
+
+    # -------------------------
+    # MASKING (NEW)
+    # -------------------------
+    if masking is not None:
+        advice.append({
+            "type": "masking",
+            "message": f"Masking detected in {len(masking)} regions"
+        })
+
+    # -------------------------
+    # DRUMS (NEW)
+    # -------------------------
+    if drums is not None:
+        advice.append({
+            "type": "drums",
+            "message": f"Kick: {drums.get('kick_strength', 0):.2f}, "
+                       f"Snare: {drums.get('snare_strength', 0):.2f}"
+        })
 
     return {
         "issues": advice

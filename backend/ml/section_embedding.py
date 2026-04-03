@@ -4,32 +4,23 @@ def extract_section_embeddings(y, sr, sections, extractor):
 
     section_embeddings = []
 
-    for sec in sections:
-        start_sample = max(0, int(sec["start"] * sr))
-        end_sample = min(len(y[0]) if y.ndim > 1 else len(y), int(sec["end"] * sr))
+    for section in sections:
+        start = int(section["start"] * sr)
+        end = int(section["end"] * sr)
 
-        if end_sample <= start_sample:
-           continue
+        y_section = y[start:end]
 
-        # Convert to mono
-        if y.ndim > 1:
-            segment = np.mean(y[:, start_sample:end_sample], axis=0)
-        else:
-            segment = y[start_sample:end_sample]
-
-        # Validate segment
-        if segment.size == 0:
-           continue
-
-        if len(segment) < sr * 2:  # at least 2 seconds
+        if len(y_section) == 0:
             continue
+       
+        embedding = extractor.extract_embedding(y_section, sr)
 
-        emb = extractor.extract_embedding(segment, sr)
+        if embedding is None:
+            embedding = np.zeros(10, dtype=np.float32)  # same size as your embedding
 
         section_embeddings.append({
-            "type": sec["type"],
-            "embedding": emb.tolist(),
-            "energy": sec.get("energy", 0.0)
+            "type": section["type"],
+           "embedding": embedding.tolist()
         })
-
+        
     return section_embeddings

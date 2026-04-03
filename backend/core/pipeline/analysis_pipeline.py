@@ -36,17 +36,43 @@ matcher = HybridMatcher()
 extractor = EmbeddingExtractor()
 
 
-async def run_full_analysis(file_path):
+# -------------------------
+# GENRE NORMALIZATION
+# -------------------------
+def normalize_genre(g):
+    if not g:
+        return "general"
 
-    # -------------------------
-    # LOAD AUDIO
-    # -------------------------
+    g = g.lower()
+
+    if "edm" in g or "house" in g or "trance" in g:
+        return "edm"
+    elif "rock" in g:
+        return "rock"
+    elif "hiphop" in g or "rap" in g:
+        return "hiphop"
+    else:
+        return "general"
+
+
+# -------------------------
+# MAIN PIPELINE (SYNC FOR TESTING)
+# -------------------------
+def run_full_analysis(file_path):
+
+    print("\n🎧 Loading audio...")
     y, sr = load_audio(file_path)
     y_mono = librosa.to_mono(y) if y.ndim > 1 else y
+    stft = np.abs(librosa.stft(y_mono, n_fft=2048, hop_length=512))
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
+
+    print(f"Sample rate: {sr}")
+    print(f"Audio shape: {y.shape}")
 
     # -------------------------
     # CORE FEATURES
     # -------------------------
+    print("\n⚙️ Extracting core features...")
     base = extract_base(y, sr)
     spectral = extract_spectral(y, sr)
     dynamics = extract_dynamics(y, sr)
@@ -60,18 +86,20 @@ async def run_full_analysis(file_path):
     }
 
     # -------------------------
-    # 🔥 ADD TRACK EMBEDDING
+    # TRACK EMBEDDING
     # -------------------------
+    print("\n🧠 Extracting track embedding...")
     track_embedding = extractor.extract_embedding(y, sr)
     features["embedding"] = track_embedding.tolist()
 
     # -------------------------
-    # TRACK MATCHING (HYBRID ML)
+    # TRACK MATCHING
     # -------------------------
-    match_data = matcher.find_best_match(features)
+    print("\n🔍 Matching reference tracks...")
+    match_data = matcher.find_best_match(features, y, sr)
 
-    best_match = match_data["best"]
-    matches = match_data["top_k"]
+    best_match = match_data.get("best")
+    matches = match_data.get("top_k", [])
 
     # -------------------------
     # GENRE PREDICTION
@@ -85,39 +113,63 @@ async def run_full_analysis(file_path):
         predicted_genre = "Unknown"
         confidence = 0.0
 
+    normalized_genre = normalize_genre(predicted_genre)
+
+    print(f"🎼 Predicted genre: {predicted_genre} → {normalized_genre}")
+
     # -------------------------
-    # 🎼 MUSICAL FEATURES
+    # MUSICAL FEATURES
     # -------------------------
+    print("\n🎼 Extracting musical features...")
     melody = extract_melody_contour(y_mono, sr)
     chords = detect_chords(y, sr)
     beat_grid = extract_beat_grid(y, sr)
 
     # -------------------------
-    # 🔥 STRUCTURE (GENRE-AWARE)
+    # STRUCTURE
     # -------------------------
-    sections = detect_sections(y, sr, genre=predicted_genre)
+    print("\n🧱 Detecting sections...")
+    sections = detect_sections(y, sr, genre=normalized_genre)
+
+    print(f"Sections found: {len(sections)}")
 
     # -------------------------
-    # 🔥 SECTION EMBEDDINGS
+    # SECTION EMBEDDINGS
     # -------------------------
+    print("\n🧠 Extracting section embeddings...")
     section_embeddings = extract_section_embeddings(
         y, sr, sections, extractor
     )
 
-    # -------------------------
-    # 🔥 SECTION MATCHING (NEW)
-    # -------------------------
-    section_matcher = SectionMatcher(matcher.reference_data)
+    print(f"Section embeddings: {len(section_embeddings)}")
 
-    section_matches = section_matcher.find_best_section_match(
-        section_embeddings
-    )
+    # -------------------------
+    # ATTACH EMBEDDINGS SAFELY
+    # -------------------------
+    for i, sec in enumerate(sections):
+        if i < len(section_embeddings):
+            sec["embedding"] = section_embeddings[i].get("embedding")
+        else:
+            sec["embedding"] = None
+
+    # -------------------------
+    # SECTION MATCHING
+    # -------------------------
+    print("\n🔗 Matching sections...")
+    if hasattr(matcher, "reference_data") and matcher.reference_data:
+        section_matcher = SectionMatcher(matcher.reference_data)
+        section_matches = section_matcher.find_best_section_match(
+            section_embeddings
+        )
+    else:
+        section_matches = []
 
     # -------------------------
     # MIX + ARRANGEMENT
     # -------------------------
+    print("\n🎚️ Analyzing mix and arrangement...")
     drums = analyze_drums(y, sr)
-    masking = detect_masking(spectral["stft"], spectral["freqs"])
+    masking = detect_masking(stft, freqs)
     loudness_curve = extract_loudness_curve(y)
 
     mix = analyze_mix(base, spectral, dynamics, stereo)
@@ -125,32 +177,39 @@ async def run_full_analysis(file_path):
     # -------------------------
     # ISSUES
     # -------------------------
+    print("\n⚠️ Detecting issues...")
     timeline_issues = detect_timeline_issues(
-        y, sr, spectral["stft"], spectral["freqs"], mix
+        y, sr, stft, freqs, mix
     )
 
     # -------------------------
-    # 🔥 COMPOSITION ENGINE (UPGRADED)
+    # COMPOSITION ENGINE
     # -------------------------
+    print("\n🎼 Generating composition advice...")
     composition_advice = composition_engine(
         harmony={"key": base["key_signature"], "chords": chords},
         rhythm=beat_grid,
         melody=melody,
         sections=sections,
-        section_matches=section_matches
+        section_matches=section_matches,
+        genre=predicted_genre
     )
 
     # -------------------------
-    # 🔥 MIX ADVISOR (UPGRADED)
+    # MIX ADVISOR
     # -------------------------
+    print("\n🎧 Generating mix advice...")
     mix_advice = mix_advisor(
         base=base,
         spectral=spectral,
         dynamics=dynamics,
         stereo=stereo,
         masking=masking,
-        drums=drums
+        drums=drums,
+        melody=melody
     )
+
+    print("\n✅ Analysis complete!")
 
     # -------------------------
     # FINAL OUTPUT
@@ -192,7 +251,6 @@ async def run_full_analysis(file_path):
         "reference_matches": matches,
         "best_match": best_match,
 
-        # 🔥 NEW INTELLIGENCE
         "section_matches": section_matches,
         "composition_advice": composition_advice,
         "mix_advice": mix_advice
