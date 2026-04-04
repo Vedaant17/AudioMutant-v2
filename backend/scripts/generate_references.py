@@ -132,35 +132,37 @@ def process_file(file_path, genre):
            return
 
         # -------------------------
-        # 📦 FINAL STRUCTURE
+        # 📦 FINAL STRUCTURE (FLAT)
         # -------------------------
         track_name = os.path.splitext(os.path.basename(file_path))[0]
 
         reference_data = {
             "track": track_name,
-            "artist": "Unknown",
-            "genre": genre,
+             "artist": "Unknown",
+             "genre": genre,
 
-            # 🔥 CORE VECTOR
+            # ✅ PURE FEATURES ONLY
+            "features": {
+                "tempo_bpm": base.get("tempo_bpm"),
+                "key_signature": base.get("key_signature"),
+                "energy_mean": dynamics.get("dynamic_range"),
+                "spectral_centroid": spectral.get("spectral_centroid"),
+                "stereo_width": stereo.get("stereo_width"),
+            },
+
+            # ✅ SEPARATE EMBEDDING
             "embedding": embedding.tolist(),
 
-            # lightweight features
-            "features": features,
-
-            # 🔥 STRUCTURE WITH EMBEDDINGS
+            # ✅ SEPARATE STRUCTURE
             "sections": section_embeddings
         }
 
-        # -------------------------
-        # 💾 SAVE
-        # -------------------------
         save_reference(
             track_name=track_name,
             artist="Unknown",
             genre=genre,
-            features=reference_data
+            data=reference_data   # now passing FULL object
         )
-
         print(f"✅ Done: {track_name}")
         print(f"   Sections saved: {len(section_embeddings)}")
 

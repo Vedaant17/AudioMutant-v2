@@ -166,24 +166,20 @@ def print_features_json(features):
 # ==================================================
 # 🔹 SAVE REFERENCE TRACK (V2 VERSION)
 # ==================================================
-def save_reference(track_name, artist, genre, features):
+def save_reference(track_name, artist, genre, data):
 
-    cleaned = clean_features(features)
+    # ✅ Clean ONLY the features part (if needed)
+    if "features" in data:
+        data["features"] = clean_features(data["features"])
 
-    data = {
-        "track": track_name,
-        "artist": artist,
-        "genre": genre,
-        "features": cleaned
-    }
-
-    # 📁 v2 path (cleaner)
+    # 📁 Save path
     folder = os.path.join("reference_data", genre)
     os.makedirs(folder, exist_ok=True)
 
     filename = f"{track_name.lower().replace(' ', '_')}.json"
     path = os.path.join(folder, filename)
 
+    # 💾 Save FULL object (no restructuring)
     with open(path, "w") as f:
         json.dump(data, f, indent=4)
 

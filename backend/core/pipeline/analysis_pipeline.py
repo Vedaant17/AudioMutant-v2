@@ -96,7 +96,7 @@ def run_full_analysis(file_path):
     # TRACK MATCHING
     # -------------------------
     print("\n🔍 Matching reference tracks...")
-    match_data = matcher.find_best_match(features, y, sr)
+    match_data = matcher.find_best_match(features, y, sr, sections=section_embeddings)
 
     best_match = match_data.get("best")
     matches = match_data.get("top_k", [])

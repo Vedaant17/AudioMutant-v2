@@ -10,7 +10,6 @@ class HybridMatcher:
 
     def __init__(self, reference_folder=None):
 
-        # ✅ Absolute path fix
         if reference_folder is None:
             base_dir = os.path.dirname(os.path.abspath(__file__))
             reference_folder = os.path.join(base_dir, "..", "reference_data")
@@ -19,9 +18,9 @@ class HybridMatcher:
 
         self.feature_vectors = []
         self.embedding_vectors = []
+        self.section_embeddings = []   # 🔥 NEW
         self.metadata = []
 
-        # ✅ FIX 1: Always initialize
         self.embedding_extractor = EmbeddingExtractor()
 
         print(f"📚 Loading reference dataset from: {self.reference_folder}")
@@ -34,9 +33,6 @@ class HybridMatcher:
     # LOAD REFERENCES
     # -------------------------
     def _load_references(self):
-
-        if not os.path.exists(self.reference_folder):
-            raise FileNotFoundError(f"Reference folder not found: {self.reference_folder}")
 
         for genre in os.listdir(self.reference_folder):
             genre_path = os.path.join(self.reference_folder, genre)
@@ -55,49 +51,59 @@ class HybridMatcher:
 
                 features = data["features"]
 
-                # Feature vector
+                # -------------------------
+                # FEATURE VECTOR
+                # -------------------------
                 feature_vector = self._feature_to_vector(features)
 
-                # Embedding
-                embedding = features.get("embedding", None)
-
+                # -------------------------
+                # FIXED EMBEDDING LOAD
+                # -------------------------
+                embedding = data.get("embedding", None)
                 if embedding is not None:
                     embedding = np.array(embedding, dtype=np.float32)
 
+                # -------------------------
+                # SECTION EMBEDDINGS 🔥
+                # -------------------------
+                sections = data.get("sections", [])
+                sec_embs = []
+
+                for sec in sections:
+                    emb = sec.get("embedding", None)
+                    if emb is not None:
+                        sec_embs.append(np.array(emb, dtype=np.float32))
+
                 self.feature_vectors.append(feature_vector)
                 self.embedding_vectors.append(embedding)
+                self.section_embeddings.append(sec_embs)
                 self.metadata.append(data)
 
-        # ✅ Convert safely
         self.feature_vectors = np.array(self.feature_vectors, dtype=np.float32)
 
-        # Handle empty embeddings safely
+        # Handle embeddings safely
         if any(e is not None for e in self.embedding_vectors):
-            self.embedding_vectors = np.array(
-                [e if e is not None else np.zeros_like(self.embedding_vectors[0])
-                 for e in self.embedding_vectors],
-                dtype=np.float32
-            )
+            first_valid = next(e for e in self.embedding_vectors if e is not None)
+
+            self.embedding_vectors = np.array([
+                e if e is not None else np.zeros_like(first_valid)
+                for e in self.embedding_vectors
+            ], dtype=np.float32)
         else:
             self.embedding_vectors = None
 
-        print(f"✅ Loaded {len(self.feature_vectors)} reference tracks")
+        print(f"✅ Loaded {len(self.metadata)} reference tracks")
 
     # -------------------------
-    # VECTOR BUILDER
+    # FEATURE VECTOR BUILDER
     # -------------------------
     def _feature_to_vector(self, f):
 
         return np.array([
             f.get("tempo_bpm", 0),
-            f.get("LUFS", 0),
-            f.get("spectral_tilt", 0),
-            f.get("low_mid_ratio", 0),
-            f.get("mid_high_ratio", 0),
-            f.get("transient_density", 0),
+            f.get("spectral_centroid", 0),
             f.get("stereo_width", 0),
-            f.get("energy", {}).get("mean", 0),
-            f.get("energy", {}).get("dynamic_range", 0),
+            f.get("energy_mean", 0),
         ], dtype=np.float32)
 
     # -------------------------
@@ -119,38 +125,92 @@ class HybridMatcher:
             self.embedding_model = None
 
     # -------------------------
-    # MATCH FUNCTION
+    # SECTION SIMILARITY 🔥
     # -------------------------
-    def find_best_match(self, features, y, sr):
+    def _section_similarity(self, input_sections):
 
-        # Feature vector
+        scores = {}
+
+        for i, ref_sections in enumerate(self.section_embeddings):
+
+            if not ref_sections:
+                continue
+
+            total_sim = 0
+            count = 0
+
+            for inp in input_sections:
+                for ref in ref_sections:
+                    sim = self._cosine_similarity(inp, ref)
+                    total_sim += sim
+                    count += 1
+
+            if count > 0:
+                scores[i] = total_sim / count
+
+        return scores
+
+    # -------------------------
+    # COSINE SIM
+    # -------------------------
+    def _cosine_similarity(self, a, b):
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-6)
+
+    # -------------------------
+    # MAIN MATCH FUNCTION
+    # -------------------------
+    def find_best_match(self, features, y, sr, sections=None):
+
         input_vec = self._feature_to_vector(features).reshape(1, -1)
 
-        # Feature similarity
         f_dist, f_idx = self.feature_model.kneighbors(input_vec)
 
         scores = {}
 
+        # -------------------------
+        # FEATURE SCORE (0.4)
+        # -------------------------
         for i, idx in enumerate(f_idx[0]):
-            scores[idx] = scores.get(idx, 0) + (1 - f_dist[0][i]) * 0.7
+            scores[idx] = (1 - f_dist[0][i]) * 0.4
 
         # -------------------------
-        # EMBEDDING MATCH (SAFE)
+        # EMBEDDING SCORE (0.3)
         # -------------------------
         if self.embedding_model is not None:
             try:
-                embedding_vec = self.embedding_extractor.extract_embedding(y, sr).reshape(1, -1)
+                emb = self.embedding_extractor.extract_embedding(y, sr)
 
-                e_dist, e_idx = self.embedding_model.kneighbors(embedding_vec)
+                if emb is not None:
+                    emb = emb.reshape(1, -1)
+                    e_dist, e_idx = self.embedding_model.kneighbors(emb)
 
-                for i, idx in enumerate(e_idx[0]):
-                    scores[idx] = scores.get(idx, 0) + (1 - e_dist[0][i]) * 0.3
+                    for i, idx in enumerate(e_idx[0]):
+                        scores[idx] = scores.get(idx, 0) + (1 - e_dist[0][i]) * 0.3
 
             except Exception as e:
-                print("⚠️ Embedding failed, skipping:", e)
+                print("⚠️ Embedding failed:", e)
 
         # -------------------------
-        # FINAL RESULT
+        # SECTION SCORE (0.2) 🔥
+        # -------------------------
+        if sections is not None and len(sections) > 0:
+            sec_scores = self._section_similarity(sections)
+
+            for idx, val in sec_scores.items():
+                scores[idx] = scores.get(idx, 0) + val * 0.2
+
+        # -------------------------
+        # GENRE BOOST (0.1) 🔥
+        # -------------------------
+        input_genre = features.get("genre", None)
+
+        if input_genre:
+            for i, meta in enumerate(self.metadata):
+                if meta.get("genre") == input_genre:
+                    scores[i] = scores.get(i, 0) + 0.1
+
+        # -------------------------
+        # FINAL
         # -------------------------
         best_idx = max(scores, key=scores.get)
 

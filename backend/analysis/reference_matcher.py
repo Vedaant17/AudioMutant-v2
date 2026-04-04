@@ -187,7 +187,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 class ReferenceMatcher:
 
-    def _init_(self, reference_dir="reference_data"):
+    def __init__(self, reference_dir="reference_data"):
         self.reference_dir = reference_dir
         self.references = []
         self.feature_matrix = []
